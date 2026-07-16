@@ -26,7 +26,7 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
 
 ## 3. Multi-tenant model
 
-- **Apex**: `akrontrade.io` (configurable via `APEX` env var on the cerebro). Each community at `<slug>.<apex>`.
+- **Apex**: `alxvarp.com` (configurable via the `APEX` env var on the cerebro and on the Vercel project). Each community at `<slug>.<apex>`. The legacy `akrontrade.io` apex is left for redirects and is not the canonical target any more.
 - **Wildcard cert** `*.<apex>` for the per-tenant subdomains. Decision DNS-01 via Cloudflare (S3 from the legacy spec).
 - **Data isolation**: Postgres RLS with `tenant_id` on every row. JWT carries tenant via the `urn:akron:tenant_memberships` custom claim.
 - **Per-tenant isolation at the network level** (NetBird mesh — see §7).
@@ -52,8 +52,9 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
 
 ## 5. Auth model
 
-- **Super-admin**: pre-provisioned by us in Supabase Auth with `app_metadata.is_super_admin: true`. No signup form. Recognized by the panel (allowed to access `apex` routes for platform-level metrics) and by the orchestrator (allowed to read all-tenant telemetry via a service-role-equivalent call).
-- **Community admin**: signs up via the public `signup.<apex>` flow. Auto-provisioned in `auth.users` with `app_metadata.tenant_id` and `app_metadata.is_tenant_admin: true`.
+- **No passwords.** Supabase Auth is configured with `signInWithPassword: false` and `signInWithOtp: true` for email magic links. The only login flow is: user enters email → receives a single-use link → link click signs them in. The Resend SMTP provider (already keyed in the legacy system via `RESEND_API_KEY`) is wired in via `auth.config.smtp.*`; `RESEND_API_KEY` + `RESEND_FROM_EMAIL` + `RESEND_FROM_NAME` live in `.env`, never hard-coded.
+- **Super-admin**: never goes through a public form. Provisioned by `auth.admin.inviteUserByEmail(email, { data: { is_super_admin: true }})` — typically called by the self-installer (`§ 14`). The invited email contains a magic link; first click creates the `auth.users` row with `app_metadata.is_super_admin: true` baked in and drops them straight into `<apex>/admin`. Recognized by the panel (allowed to access `apex` routes for platform-level metrics) and by the orchestrator (allowed to read all-tenant telemetry via a service-role-equivalent call).
+- **Community admin**: signs up via the public `signup.<apex>` flow. After the form submit the system sends them a magic link to their email; first click creates `auth.users` + the `tenants` row + sets `app_metadata.tenant_id` + `app_metadata.is_tenant_admin: true`. No password is ever created or stored.
 - **JWT claims used by services**:
   - `sub` (Supabase user UUID, stable per user)
   - `email`
@@ -61,27 +62,28 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
   - `app_metadata.is_super_admin` (boolean)
   - `app_metadata.is_tenant_admin` (boolean)
 - **Tenant routing**: the orchestrator and signals-bridge look up `tenant_id` from the JWT and only act on rows for that tenant. Postgres RLS provides defense-in-depth at the DB.
+- **Trade-offs**: email-compromise = account-compromise, accepted because super-admins are by-invite-only and community admins are verified-by-email at signup. No offline login.
 
 ---
 
 ## 6. Sign-up flow
 
-1. Public signup at `signup.<apex>` (Vercel-hosted).
-2. Community admin enters: **slug** (becomes `<slug>.<apex>`), email, password.
+1. Public signup at `signup.alxvarp.com` (or `signup.${APEX}` if `APEX` env var is overridden on the Vercel project). Vercel-hosted.
+2. Community admin enters: **slug** (becomes `<slug>.alxvarp.com`) + email. **No password field** — auth is magic-link only per `§ 5`.
 3. System validates:
-   - Slug is unique, lowercase, alphanumeric + hyphens only.
-   - Email is valid.
-4. System auto-provisions:
-   - New `auth.users` row with `app_metadata.tenant_id: <new uuid>`.
-   - New row in `tenants` table with the slug + display name + theme defaults.
-   - First user gets `app_metadata.is_tenant_admin: true`.
-5. User redirected to `<slug>.<apex>/onboarding` — wizard:
+   - Slug is unique, lowercase, alphanumeric + hyphens only (`^[a-z0-9-]{3,32}$`).
+   - Email is valid + not already a tenant admin.
+4. System sends a magic link to the email via Resend (`RESEND_API_KEY` etc. all env-driven).
+5. User clicks the link → first click creates:
+   - `auth.users` row with `app_metadata.tenant_id: <new uuid>` and `app_metadata.is_tenant_admin: true`.
+   - `tenants` row with the slug, display name, default theme colors.
+6. User redirected to `<slug>.alxvarp.com/onboarding` — wizard:
    - Welcome + branded panel preview.
    - **Step 1 — Register your node**: paste a token / run a one-line command.
    - **Step 2 — Set slot count**: how many MT5 slots you want on day 1.
    - **Step 3 — Choose a theme** (colors + logo).
    - **Step 4 — Done** → land in the panel dashboard.
-6. Once the node registers, slots appear in the panel automatically.
+7. Once the node registers, slots appear in the panel automatically.
 
 ---
 
@@ -232,6 +234,58 @@ LICENSE
 
 ---
 
+## 14. Self-installer (one-command setup)
+
+The first-time setup is captured in `AkronCloud/scripts/setup/install.sh`. An operator (the platform owner) runs this **once** on a fresh machine to provision everything end-to-end, from "I have all the accounts and API keys" to "fully deployed, ready for community signups".
+
+### 14.1. Inputs (all env, nothing hard-coded)
+
+| Variable | Meaning |
+|---|---|
+| `SUPABASE_PROJECT_REF` | The Supabase project URL host |
+| `SUPABASE_SERVICE_ROLE_KEY` | Service-role key (NOT anon) |
+| `VERCEL_TOKEN` | Vercel personal access token |
+| `VERCEL_PROJECT_ID` | Vercel project pre-created with `<apex>` domain attached |
+| `NETBIRD_MANAGEMENT_KEY` | NetBird management API token |
+| `CEREBRO_VPS_HOST` | Where the orchestrator will be deployed (e.g., `45.151.122.104`) |
+| `CEREBRO_VPS_SSH_KEY` | Path to SSH key file (the installer `scp`s the orchestrator bundle + `ssh`s to deploy) |
+| `SUPER_ADMIN_EMAIL` | The email that gets the magic-link invite after install completes |
+| `APEX` | Defaults to `alxvarp.com` |
+| `RESEND_API_KEY` / `RESEND_FROM_EMAIL` / `RESEND_FROM_NAME` | Resend creds wired into Supabase Auth SMTP |
+
+Per-vendor secrets (Supabase anon key, Vercel deploy hook URL, NetBird setup_key base, etc.) are either left as installer outputs that the operator pastes into Vercel project settings, or read back via the same API in a follow-up step.
+
+### 14.2. What the installer does
+
+1. **Supabase**: applies schema migrations (idempotent), enables RLS, configures `signInWithOtp = true` + Resend SMTP, sets the JWT custom-claims hook.
+2. **NetBird**: creates the `akron-cloud` network if missing, generates the base setup_key, stores it back in `.env` for the orchestrator.
+3. **Vercel**: triggers a production deploy of the `AkronCloud` monorepo's `apps/web` panel; reads back the deployment URL.
+4. **DNS**: instructs the operator to point `<apex>` + `*.<apex>` to the Vercel deployment; alternatively creates Cloudflare records automatically if `CLOUDFLARE_API_TOKEN` is set.
+5. **Cerebro (orchestrator)**: `scp` + `ssh` into `CEREBRO_VPS_HOST`, runs `deploy-cerebro.sh` with the Supabase + NetBird env, restarts the systemd unit, runs the legacy smoke test (a curl to `/v1/internal/nodes/whoami`).
+6. **Super-admin**: calls `supabase.auth.admin.inviteUserByEmail(SUPER_ADMIN_EMAIL, { data: { is_super_admin: true }})`. The operator receives a magic link in their inbox, clicks it, and lands in `<apex>/admin` already with `is_super_admin: true` set.
+7. **Output**: prints the platform URL, the invited-super-admin status, and a checklist (Cloudflare DNS, Resend domain verification, NetBird magic DNS check).
+
+### 14.3. Idempotency
+
+Every step is `set -euo pipefail`-wrapped and re-runnable. Re-running on an already-provisioned Supabase project does not duplicate; it instead applies pending migrations + re-asserts config.
+
+### 14.4. Out-of-scope (still human)
+
+Per the providers' own TOS, the operator must manually:
+- Sign up for Vercel + create the project + attach the `<apex>` domain.
+- Sign up for Supabase + create the project + capture `SUPABASE_PROJECT_REF` + `SUPABASE_SERVICE_ROLE_KEY`.
+- Sign up for NetBird Cloud (or self-host a management server) and get the `NETBIRD_MANAGEMENT_KEY`.
+- Set up a VPS reachable via SSH.
+- Get a Cloudflare account + token if the apex is a Cloudflare-managed domain.
+
+The installer assumes these are done; it does the wiring.
+
+### 14.5. Why this is here
+
+"Anyone can fork `AkronCloud` + run `./scripts/setup/install.sh` + own their own platform" — i.e. any operator (the team, a future sister team, an enterprise customer wanting their own isolated instance) can spin up a parallel AkronCloud on their own terms without our help. Every credential lives in `.env`, so the installer is auditable and the same script reproduces the same platform across operators.
+
+---
+
 ## 13. Decisions log
 
 | Date | Decision | Why |
@@ -244,3 +298,7 @@ LICENSE
 | 2026-07-16 | Per-tenant NetBird mesh (not shared). | Network isolation is the safest default; cost is one extra setup_key per tenant signup. |
 | 2026-07-16 | Collapse the legacy `akron-signals-service-1` into the cerebro orchestrator's signals-bridge. | Removes an entire service from the deploy; Supabase Realtime covers the front-end fan-out. |
 | 2026-07-16 | Two new repos: `AkronCloud` (monorepo, this) + `AkronCloud-Node` (tenant bootstrap). | Same pattern as legacy `Akron` + `Akronfront`, but with backend as a monorepo (apps + packages) and the node bootstrap as a focused release-able artifact. |
+| 2026-07-16 | Slot ↔ cerebro addressing via NetBird peer name + Docker context (no public DNS, no host-published ports). | Avoids port-443 collisions on tenant VPSes (e.g., Canencio / WordPress stacks); eliminates per-slot public certs. See `§ 4 Tech stack` row, `§ 7` step 5. |
+| 2026-07-16 | Domain apex moved to `alxvarp.com` (with `APEX` env var still overridable). | `alxvarp.com` is owned by the team and was already partially in use; consolidating reduces DNS sprawl. See `§ 3`, `§ 6`, `§ 14.1`. |
+| 2026-07-16 | Auth is magic-link only (no passwords). Supabase Auth `signInWithPassword=false`, `signInWithOtp=true`. Resend SMTP. | Removes password-management surface. Trade-off (email-compromise = account-compromise) is acceptable because super-admins are by-invite only and community admins verify email at signup. See `§ 5`, `§ 6`, `§ 14.2`. |
+| 2026-07-16 | One-command self-installer in `AkronCloud/scripts/setup/install.sh`. | Makes the platform forkable + reproducible. Any operator with the per-vendor API keys can spin up a parallel AkronCloud without our help. Idempotent. See `§ 14`. |

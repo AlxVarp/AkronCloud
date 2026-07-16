@@ -22,3 +22,38 @@
 ---
 
 ## Format for new entries
+
+```markdown
+## YYYY-MM-DD — short title
+
+- **Decision**: ...
+- **Why**: ...
+- **Refs**: PR #N / commit <sha> / [discussion link]
+```
+
+---
+
+## 2026-07-16 — Domain apex moved to `alxvarp.com`
+
+- **Decision**: canonical apex is now `alxvarp.com` (with `<slug>.alxvarp.com` for tenants), `signup.alxvarp.com`, `*.alxvarp.com` → Vercel. The legacy `akrontrade.io` apex stays as a redirect target only.
+- **Why**: `alxvarp.com` is owned by the team and was already partially in use (legacy `akron.alxvarp.com` redirector in the RULES.md era). Consolidating to one apex reduces DNS sprawl; the `APEX` env var keeps it overridable for future migrations or sister-team instances.
+- **Refs**: `AkronCloud/SPEC.md` § 3 (Multi-tenant model — apex), § 6 (Sign-up flow), § 14 (Self-installer).
+
+---
+
+## 2026-07-16 — Magic-link only auth, no passwords
+
+- **Decision**: Supabase Auth is configured with `signInWithPassword=false` and `signInWithOtp=true` (email magic links). Resend is the SMTP provider (the legacy system already had a `RESEND_API_KEY` flow, so it carries over).
+- **Why**: removes the entire password-management surface — no breach surface, no reset flow, no hashing/storage of credentials. The trade-off (email-compromise = account-compromise) is acceptable because super-admins are by-invite only and community admins verify their email at signup.
+- **Concretely**: super-admin provisioning becomes `auth.admin.inviteUserByEmail(email, { data: { is_super_admin: true }})`. The invite email is a magic link; first click creates the row with the metadata baked in.
+- **Refs**: `AkronCloud/SPEC.md` § 5 (Auth model), § 6 (Sign-up flow — step 2 + step 4 magic-link), § 14 (Self-installer — step 6).
+
+---
+
+## 2026-07-16 — One-command self-installer (`install.sh`)
+
+- **Decision**: the first-time setup is captured in `AkronCloud/scripts/setup/install.sh`. An operator (us now, a future sister team, or an enterprise customer wanting their own isolated instance) runs the script with `.env` populated, and gets a fully provisioned platform end-to-end.
+- **Why**: makes the platform **forkable + reproducible**. Any operator can run their own AkronCloud without our help, given they have the per-vendor API keys. Replaces the "9 months of operational history" entry barrier that the legacy `Akron` repo currently presents to a new contributor.
+- **Scope**: from "I have all the per-provider accounts and API keys" to "platform deployed + my super-admin invite is in my inbox". The accounts themselves (Vercel, Supabase, NetBird, Cloudflare) are still manual per their TOS; the script does the wiring.
+- **Idempotency**: every step is `set -euo pipefail` + re-runnable. Re-running on a partially-provisioned Supabase project does not duplicate; it applies pending migrations + re-asserts config.
+- **Refs**: `AkronCloud/SPEC.md` § 14 (Self-installer).
