@@ -15,7 +15,7 @@
 ## 2026-07-16 — Slot ↔ cerebro addressing uses NetBird peer name, not public DNS
 
 - **Decision**: All slot ↔ cerebro traffic happens over a NetBird mesh. The cerebro addresses each remote node by its NetBird-assigned peer name (e.g. `nodo1`) via Docker context. Slot containers bind their internal ports (`:8001-8003`, `:3000`, etc.) **only inside the container** — never published to the node's host interface.
-- **Why**: eliminate the need for public DNS records, public certs, or port forwarding for slots. The only public-facing TLS we own is `*.akrontrade.io` → Vercel (managed by Vercel). Resolves port-443 conflicts on tenant VPSes that already run other apps (Canencio, WordPress, etc.) — we never claim `:443` on a tenant node.
+- **Why**: eliminate the need for public DNS records, public certs, or port forwarding for slots. The only public-facing TLS we own is `*.alxvarp.com` → Vercel (managed by Vercel). Resolves port-443 conflicts on tenant VPSes that already run other apps (Canencio, WordPress, etc.) — we never claim `:443` on a tenant node.
 - **Concretely**: a tenant can run our `akron/mt5-base` slot pool on the same VPS as a medical-app stack sharing `:443`. The cerebro -> `docker --context nodo1 exec ...` reaches the remote daemon through NetBird MagicDNS.
 - **Refs**: `AkronCloud/SPEC.md` § 4 (Tech stack — NetBird row), § 7 (Node self-hosting — step 5).
 
@@ -35,7 +35,7 @@
 
 ## 2026-07-16 — Domain apex moved to `alxvarp.com`
 
-- **Decision**: canonical apex is now `alxvarp.com` (with `<slug>.alxvarp.com` for tenants), `signup.alxvarp.com`, `*.alxvarp.com` → Vercel. The legacy `akrontrade.io` apex stays as a redirect target only.
+- **Decision**: canonical apex is now `alxvarp.com` (with `<slug>.alxvarp.com` for tenants), `signup.alxvarp.com`, `*.alxvarp.com` → Vercel. `akrontrade.io` is **not used** — no redirects, no references, no shared certs.
 - **Why**: `alxvarp.com` is owned by the team and was already partially in use (legacy `akron.alxvarp.com` redirector in the RULES.md era). Consolidating to one apex reduces DNS sprawl; the `APEX` env var keeps it overridable for future migrations or sister-team instances.
 - **Refs**: `AkronCloud/SPEC.md` § 3 (Multi-tenant model — apex), § 6 (Sign-up flow), § 14 (Self-installer).
 

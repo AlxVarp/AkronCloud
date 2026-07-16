@@ -26,7 +26,7 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
 
 ## 3. Multi-tenant model
 
-- **Apex**: `alxvarp.com` (configurable via the `APEX` env var on the cerebro and on the Vercel project). Each community at `<slug>.<apex>`. The legacy `akrontrade.io` apex is left for redirects and is not the canonical target any more.
+- **Apex**: `alxvarp.com` (configurable via the `APEX` env var on the cerebro and on the Vercel project). Each community at `<slug>.<apex>`. `akrontrade.io` is not used by AkronCloud — no redirects, no references, no shared certs.
 - **Wildcard cert** `*.<apex>` for the per-tenant subdomains. Decision DNS-01 via Cloudflare (S3 from the legacy spec).
 - **Data isolation**: Postgres RLS with `tenant_id` on every row. JWT carries tenant via the `urn:akron:tenant_memberships` custom claim.
 - **Per-tenant isolation at the network level** (NetBird mesh — see §7).
