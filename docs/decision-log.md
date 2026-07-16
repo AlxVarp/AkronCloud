@@ -12,12 +12,13 @@
 
 ---
 
+## 2026-07-16 — Slot ↔ cerebro addressing uses NetBird peer name, not public DNS
+
+- **Decision**: All slot ↔ cerebro traffic happens over a NetBird mesh. The cerebro addresses each remote node by its NetBird-assigned peer name (e.g. `nodo1`) via Docker context. Slot containers bind their internal ports (`:8001-8003`, `:3000`, etc.) **only inside the container** — never published to the node's host interface.
+- **Why**: eliminate the need for public DNS records, public certs, or port forwarding for slots. The only public-facing TLS we own is `*.akrontrade.io` → Vercel (managed by Vercel). Resolves port-443 conflicts on tenant VPSes that already run other apps (Canencio, WordPress, etc.) — we never claim `:443` on a tenant node.
+- **Concretely**: a tenant can run our `akron/mt5-base` slot pool on the same VPS as a medical-app stack sharing `:443`. The cerebro -> `docker --context nodo1 exec ...` reaches the remote daemon through NetBird MagicDNS.
+- **Refs**: `AkronCloud/SPEC.md` § 4 (Tech stack — NetBird row), § 7 (Node self-hosting — step 5).
+
+---
+
 ## Format for new entries
-
-```markdown
-## YYYY-MM-DD — short title
-
-- **Decision**: ...
-- **Why**: ...
-- **Refs**: PR #N / commit <sha> / [discussion link]
-```

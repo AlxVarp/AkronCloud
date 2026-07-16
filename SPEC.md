@@ -43,7 +43,7 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
 | DB + Auth + Storage + Realtime | **Supabase** | One vendor, free tier; Postgres RLS works exactly the same; JWT/OIDC-compatible auth; built-in realtime for signals. |
 | Orchestrator (control plane) | Existing VPS at `45.151.122.104` | Already paid for; already running the slot lifecycle we have. Stays as our single always-on service. |
 | MT5 slot pool | Per-tenant VPS, **self-hosted** | Customer brings hardware; we ship a one-line bootstrap script. |
-| Tenant-to-cerebro mesh | **NetBird** (free, self-hosted or SaaS) | Already in use in the legacy system; each tenant gets its own setup_key for isolation. |
+| Tenant-to-cerebro mesh | **NetBird** (free, self-hosted or SaaS) with **MagicDNS** for peer-name addressing | Each tenant gets its own setup_key for isolation. Slot containers are addressed by NetBird peer name + Docker context, not by public DNS or host-published ports. This means a tenant VPS can host other apps (Canencio-style stacks, WordPress, etc.) on `:443` without us needing to coordinate ports. |
 | TLS for `*.<apex>` | Wildcard cert, DNS-01 via Cloudflare | S3 decision. |
 
 > **Single source of truth principle**: no duplicate vendor evaluations. Supabase gives us DB + Auth + Storage + Realtime in one place; Vercel gives us the app tier; the VPS gives us long-lived state (orchestrator).
@@ -103,6 +103,7 @@ A free, multi-tenant, **self-hosted-per-tenant** community platform. Every signu
    - Stands up `desired_slot_count` warm-pool slots, each with a unique `slot_index`, all networked to the orchestrator via the NetBird mesh.
    - Reports back to the orchestrator: "node registered, tenant X, slot count N, all slots healthy".
 4. After registration, the orchestrator manages slot lifecycle as it does today (warm pool, recycle, broker-manual flow), but scoped to the tenant — slots from one tenant never see slots from another tenant.
+5. **Slot ↔ cerebro addressing.** The cerebro runs `docker --context nodo<peer-name>` (the NetBird-assigned peer name, e.g. `nodo1`). It manages the slot pool via the Docker daemon on the remote node, traversing the NetBird mesh. Slot containers bind their internal ports (`:8001-8003`, `:3000`, etc.) **only inside the container** — never published to the node's host interface. As a result the node can host unrelated apps (Canencio, WordPress, etc.) on `:80`/`:443` without port conflict.
 
 ---
 
