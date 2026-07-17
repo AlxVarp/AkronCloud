@@ -190,21 +190,42 @@ docs/
 ```
 
 ### `AkronCloud-Node` (separate repo) — tenant VPS bootstrap
-
 ```
 README.md                              # how the bootstrap works + how to test
 bootstrap.sh                           # the one-line installer (the active artifact)
-src/
-  lib/
-    netbird.sh                         # NetBird mesh client setup
-    mql5-base.sh                       # akron/mt5-base image pull + warm-pool startup
-    registry.sh                        # report back to orchestrator
 hooks/                                  # future (post-installer hooks)
 tests/
   vm/                                  # Vagrant / Lima config for local bootstrap tests
 package.json                           # for shellcheck / shfmt + npm-run
 LICENSE
 ```
+
+### `AkronCloud-Slot` (separate repo) — the slot service
+
+```
+SPEC.md                                  # API contract (REST + WS — the canonical source of truth for this repo)
+README.md                                # what + repo layout + companion repos
+LICENSE                                  # MIT
+package.json                             # @akroncloud/slot-service (Fastify + ws + Drizzle + jose + zod + pino)
+tsconfig.json
+docs/CONNECTORS.md                       # how to add a new broker connector (slot's extension point)
+src/
+  server.ts                              # Fastify + WS upgrade
+  api/{rest.ts,ws.ts}
+  ledger.ts                              # truth source (positions/orders/fills) backed by local SQLite
+  reconciler.ts                          # ledger ↔ broker periodic sync
+  risk.ts                                # pre-trade validator (slot-side)
+  auth.ts                                # cerebro-issued JWT validation
+  connectors/{base.ts,deriv.ts,...}      # pluggable BrokerConnector implementations
+  db/{schema.ts,migrations/...}
+```
+
+There is **no web UI, no login page, no visual layer**. The slot is a pure
+API service: REST + WebSocket, authenticated by short-lived JWTs
+signed by the cerebro. Deployed to the tenant VPS via the
+`AkronCloud-Node` bootstrap, which pulls
+`ghcr.io/alxvarp/akroncloud-slot:<tag>` and runs the image with
+`.env`-driven broker credentials + JWT secret.
 
 ---
 
@@ -286,6 +307,61 @@ The installer assumes these are done; it does the wiring.
 
 ---
 
+## 15. Tenant modules
+
+Each tenant's panel lets the admin enable/disable modules. Modules are scoped per `tenant_id`; one tenant's modules don't affect another's.
+
+### MVP module matrix
+
+| Module | Tier | What it does (one line) |
+|---|---|---|
+| signals | MVP | Signal provider posts trade instructions → cerebro executes in the tenant's slots. |
+| copy | MVP | Leader's slot closes a trade → cerebro mirrors orders in follower slots per configured ratio. |
+| analytics | MVP | Aggregations over `trade_events` (P&L, drawdown, leaderboard) per tenant. |
+| notifications | MVP | Cron-driven dispatcher sends email (Resend) + webhook on trade/health events. |
+| risk controls (per-slot) | MVP | Pre-trade check on each slot — rejects + kill-switches if `max_position_size` or `max_daily_loss` would be exceeded. |
+| chat | MVP | Per-tenant chat channels with realtime push via Supabase Realtime. |
+| calendar | MVP | Economic event feed synced weekly from TradingEconomics API → Supabase. |
+
+### Tier 2 — post-MVP
+
+- **marketplace** — rent strategies/signals inside the community (revenue split).
+- **ea-hosting** — run MQL5 EAs as managed services on tenant slots.
+- **risk controls (advanced)** — cross-slot correlation, real-time margin, portfolio-level VaR.
+
+### Out of scope
+
+- **academia / tutorials** — high content-creation cost; not differentiating.
+- **multi-broker per slot** — 1 broker per slot is sufficient for MVP.
+- **news feed** — depends on data-provider contracts; changes cost model.
+
+### Toggle mechanism
+
+Each module's enable/disable flag is one BOOLEAN column on the `tenants` row. Toggling from the panel: `PATCH /v1/tenants/me/modules/{module}` with `{ enabled: bool }`.
+
+Per-module detail (data tables, RLS, orchestrator endpoints, UI surface): see [`docs/MODULES.md`](./MODULES.md).
+
+---
+
+## 16. Slot service (lives in [`AkronCloud-Slot`](https://github.com/AlxVarp/AkronCloud-Slot))
+
+The slot service is **its own repo** with **its own release cadence**. Architectural shape:
+
+- **No web UI.** Pure REST + WebSocket API. Auth via short-lived JWT (HS256, max 1h, per-tenant secret) signed by the cerebro.
+- **One broker per slot** via a pluggable `BrokerConnector` (Deriv in MVP). Connector interface defined in `AkronCloud-Slot/SPEC.md § 4`.
+- **Internal ledger** (SQLite file in `/var/lib/akron-slot/state.db`) is the truth source for orders/fills/positions; the reconciler keeps it in sync with the broker every 30s.
+- **Deployed** as `ghcr.io/alxvarp/akroncloud-slot:<semver>`; the `AkronCloud-Node` bootstrap pulls + runs it.
+- **Risk engine** (pre-trade validator) reads `risk_limits` set by the cerebro.
+- **Reconciliation** emits drift events to the WS + persisted audit; on >1 lot drift or broker-rejected order, the account is marked `status='error'` and further orders return `503 RECONCILING`.
+
+The cerebro consumes the slot's API only via the NetBird peer link — never through a public endpoint. Modules (`signals`, `copy`, `analytics`, etc.) consume cerebro-mediated slot events, **not broker APIs directly**. The slot is the **single point of contact with the broker**.
+
+**Where to read more**:
+- API contract (REST + WS endpoints, auth, error codes, data model, env vars): [`AkronCloud-Slot/SPEC.md`](https://github.com/AlxVarp/AkronCloud-Slot/blob/master/SPEC.md).
+- How to add a new broker connector: [`AkronCloud-Slot/docs/CONNECTORS.md`](https://github.com/AlxVarp/AkronCloud-Slot/blob/master/docs/CONNECTORS.md).
+
+---
+
 ## 13. Decisions log
 
 | Date | Decision | Why |
@@ -298,6 +374,7 @@ The installer assumes these are done; it does the wiring.
 | 2026-07-16 | Per-tenant NetBird mesh (not shared). | Network isolation is the safest default; cost is one extra setup_key per tenant signup. |
 | 2026-07-16 | Collapse the legacy `akron-signals-service-1` into the cerebro orchestrator's signals-bridge. | Removes an entire service from the deploy; Supabase Realtime covers the front-end fan-out. |
 | 2026-07-16 | Two new repos: `AkronCloud` (monorepo, this) + `AkronCloud-Node` (tenant bootstrap). | Same pattern as legacy `Akron` + `Akronfront`, but with backend as a monorepo (apps + packages) and the node bootstrap as a focused release-able artifact. |
+| 2026-07-16 | Third repo: `AkronCloud-Slot` (slot service — pure REST + WS API). | The slot has its own API contract, its own release cadence, and no UI at all — it earns its own repo so the broker-connector work doesn't entangle the platform monorepo. See `§ 16` for the pointer. `AkronCloud-Node` now pulls `ghcr.io/alxvarp/akroncloud-slot:<tag>` instead of doing the slot work itself. |
 | 2026-07-16 | Slot ↔ cerebro addressing via NetBird peer name + Docker context (no public DNS, no host-published ports). | Avoids port-443 collisions on tenant VPSes (e.g., Canencio / WordPress stacks); eliminates per-slot public certs. See `§ 4 Tech stack` row, `§ 7` step 5. |
 | 2026-07-16 | Domain apex moved to `alxvarp.com` (with `APEX` env var still overridable). | `alxvarp.com` is owned by the team and was already partially in use; consolidating reduces DNS sprawl. See `§ 3`, `§ 6`, `§ 14.1`. |
 | 2026-07-16 | Auth is magic-link only (no passwords). Supabase Auth `signInWithPassword=false`, `signInWithOtp=true`. Resend SMTP. | Removes password-management surface. Trade-off (email-compromise = account-compromise) is acceptable because super-admins are by-invite only and community admins verify email at signup. See `§ 5`, `§ 6`, `§ 14.2`. |

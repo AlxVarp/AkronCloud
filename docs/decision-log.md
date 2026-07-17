@@ -57,3 +57,12 @@
 - **Scope**: from "I have all the per-provider accounts and API keys" to "platform deployed + my super-admin invite is in my inbox". The accounts themselves (Vercel, Supabase, NetBird, Cloudflare) are still manual per their TOS; the script does the wiring.
 - **Idempotency**: every step is `set -euo pipefail` + re-runnable. Re-running on a partially-provisioned Supabase project does not duplicate; it applies pending migrations + re-asserts config.
 - **Refs**: `AkronCloud/SPEC.md` § 14 (Self-installer).
+
+---
+
+## 2026-07-16 — Slot service is its own repo (`AkronCloud-Slot`)
+
+- **Decision**: extract the slot-service out of `AkronCloud/apps/orchestrator/src/slots/` into its own repo, **`AkronCloud-Slot`**. The slot is a pure REST + WebSocket API service (no web UI, no login page, no visual layer). It listens on a NetBird-internal IP and authenticates with short-lived JWTs signed by the cerebro. Connector interface (`BrokerConnector`) is pluggable: Deriv in MVP, MT5 / IBKR / Alpaca later.
+- **Why**: the slot has a **distinct API contract**, a **distinct release cadence**, and **no UI**. Lumping it into the platform monorepo would entangle broker-connector work with platform-panel work. Three sibling repos (platform / bootstrap / slot) each own one thing — cleaner for review, versioning, and onboarding new contributors.
+- **What it replaces in the bootstrap**: `AkronCloud-Node/bootstrap.sh` no longer pulls `ghcr.io/alxvarp/akron-mt5-base` and runs the legacy MT5 stack directly. It now pulls `ghrc.io/alxvarp/akroncloud-slot:<tag>` and runs the slot container. The MT5 image stays in the legacy repo for the still-running `45.151.122.104` deploy.
+- **Refs**: `AkronCloud/SPEC.md` § 16 + `§ 10` + `§ 13`. Live at <https://github.com/AlxVarp/AkronCloud-Slot>.
